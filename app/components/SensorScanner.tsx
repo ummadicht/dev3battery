@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { withBase } from "@/lib/basePath";
 import { fetchDeviceInfo } from "@/lib/deviceFetch";
 import { resolveClient } from "@/lib/clients";
@@ -100,6 +100,11 @@ export default function SensorScanner({
   const [lastReport, setLastReport] = useState<SensorScanReport | null>(null);
   const [history, setHistory] = useState<StoredSensorScanRow[]>([]);
 
+  const onMetadataChangeRef = useRef(onMetadataChange);
+  useEffect(() => {
+    onMetadataChangeRef.current = onMetadataChange;
+  }, [onMetadataChange]);
+
   useEffect(() => {
     setTimezone(detectBrowserTimezone());
     setDatetime(new Date().toISOString());
@@ -119,7 +124,7 @@ export default function SensorScanner({
   }, [effectiveClient]);
 
   useEffect(() => {
-    onMetadataChange?.({
+    onMetadataChangeRef.current?.({
       phone,
       imei,
       model,
@@ -142,7 +147,6 @@ export default function SensorScanner({
     storeAddress,
     timezone,
     datetime,
-    onMetadataChange,
   ]);
 
   const loadHistory = useCallback(async () => {

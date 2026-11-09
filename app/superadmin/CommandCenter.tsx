@@ -74,6 +74,21 @@ const OUTCOME_COLORS = {
   skip: "#D97706",
 };
 
+const BAR_CHART_MARGIN = { top: 12, right: 20, left: 0, bottom: 8 };
+const BY_TEST_CHART_MARGIN = { top: 12, right: 20, left: 0, bottom: 48 };
+const X_AXIS_TICK = { fontSize: 12, fontWeight: 600 };
+const BY_TEST_X_AXIS_TICK = { fontSize: 11 };
+const Y_AXIS_TICK = { fontSize: 12 };
+const TOOLTIP_CONTENT_STYLE = {
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.1)",
+  fontSize: 12,
+};
+const BAR_RADIUS: [number, number, number, number] = [8, 8, 0, 0];
+const STACK_FLAT_RADIUS: [number, number, number, number] = [0, 0, 0, 0];
+const STACK_TOP_RADIUS: [number, number, number, number] = [6, 6, 0, 0];
+const formatBarTooltip = (value: any): [any, string] => [value, "Checks"];
+
 const SEVERITY_TONE: Record<Severity, string> = {
   hold: "chip-red",
   review: "chip-red",
@@ -198,7 +213,7 @@ export default function CommandCenter({
     ];
 
     return {
-      today: sessions.filter((s) => (s.created_at || s.updated_at).startsWith(today)).length,
+      today: sessions.filter((s) => String(s.created_at || s.updated_at || "").startsWith(today)).length,
       funnel: reachedFunnel(sessions),
       exceptions: deriveExceptions(sessions),
       diagnostics: {
@@ -209,6 +224,15 @@ export default function CommandCenter({
       distributionData,
     };
   }, [data, latestSensorScan]);
+
+  const handleScanComplete = useCallback((report: SensorScanReport, meta: StoreContextMetadata) => {
+    setLatestSensorScan(report);
+    setStoreMeta(meta);
+  }, []);
+
+  const handleSessionSaved = useCallback(() => {
+    void load();
+  }, [load]);
 
   function handleDownloadPdf() {
     if (!data) return;
@@ -288,11 +312,19 @@ export default function CommandCenter({
     });
   }
 
-  if (!data) return <div className="card p-6 text-sm text-[var(--muted)]">{error || "Loading operations…"}</div>;
-
   const diagSummary = view.diagnostics.summary;
   const passRate =
     diagSummary.total > 0 ? Math.round((diagSummary.pass / diagSummary.total) * 100) : 0;
+
+  const formatPieTooltip = useCallback(
+    (value: any, name: any): [string, any] => {
+      const total = diagSummary.total || 1;
+      return [`${value} (${Math.round((Number(value) / total) * 100)}%)`, name];
+    },
+    [diagSummary.total],
+  );
+
+  if (!data) return <div className="card p-6 text-sm text-[var(--muted)]">{error || "Loading operations…"}</div>;
 
   return (
     <div className="space-y-5">
@@ -423,24 +455,20 @@ export default function CommandCenter({
         {/* Recharts Visualization */}
         {chartMode === "distribution" ? (
           <div className="mt-5 grid items-center gap-6 lg:grid-cols-[1.25fr_.75fr]">
-            <div className="h-[280px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="h-[280px] min-w-0 w-full">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
                 <BarChart
                   data={view.distributionData}
-                  margin={{ top: 12, right: 20, left: 0, bottom: 8 }}
+                  margin={BAR_CHART_MARGIN}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.08)" />
-                  <XAxis dataKey="outcome" tick={{ fontSize: 12, fontWeight: 600 }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                  <XAxis dataKey="outcome" tick={X_AXIS_TICK} />
+                  <YAxis allowDecimals={false} tick={Y_AXIS_TICK} />
                   <Tooltip
-                    formatter={(value: any) => [value, "Checks"]}
-                    contentStyle={{
-                      borderRadius: 12,
-                      border: "1px solid rgba(0,0,0,0.1)",
-                      fontSize: 12,
-                    }}
+                    formatter={formatBarTooltip}
+                    contentStyle={TOOLTIP_CONTENT_STYLE}
                   />
-                  <Bar dataKey="count" name="Diagnostic Checks" radius={[8, 8, 0, 0]} maxBarSize={72} isAnimationActive={false}>
+                  <Bar dataKey="count" name="Diagnostic Checks" radius={BAR_RADIUS} maxBarSize={72} isAnimationActive={false}>
                     {view.distributionData.map((entry) => (
                       <Cell key={entry.name} fill={entry.fill} />
                     ))}
@@ -449,9 +477,9 @@ export default function CommandCenter({
               </ResponsiveContainer>
             </div>
 
-            <div className="h-[280px] w-full">
+            <div className="h-[280px] min-w-0 w-full">
               {diagSummary.total > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
                   <PieChart>
                     <Pie
                       data={view.distributionData}
@@ -469,15 +497,8 @@ export default function CommandCenter({
                       ))}
                     </Pie>
                     <Tooltip
-                      formatter={(value: any, name: any) => [
-                        `${value} (${Math.round((Number(value) / diagSummary.total) * 100)}%)`,
-                        name,
-                      ]}
-                      contentStyle={{
-                        borderRadius: 12,
-                        border: "1px solid rgba(0,0,0,0.1)",
-                        fontSize: 12,
-                      }}
+                      formatter={formatPieTooltip}
+                      contentStyle={TOOLTIP_CONTENT_STYLE}
                     />
                     <Legend verticalAlign="bottom" height={32} />
                   </PieChart>
@@ -493,11 +514,11 @@ export default function CommandCenter({
             </div>
           </div>
         ) : (
-          <div className="mt-5 h-[320px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="mt-5 h-[320px] min-w-0 w-full">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={50}>
               <BarChart
                 data={view.diagnostics.byTest}
-                margin={{ top: 12, right: 20, left: 0, bottom: 48 }}
+                margin={BY_TEST_CHART_MARGIN}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.08)" />
                 <XAxis
@@ -506,20 +527,14 @@ export default function CommandCenter({
                   textAnchor="end"
                   interval={0}
                   height={64}
-                  tick={{ fontSize: 11 }}
+                  tick={BY_TEST_X_AXIS_TICK}
                 />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                <Tooltip
-                  contentStyle={{
-                    borderRadius: 12,
-                    border: "1px solid rgba(0,0,0,0.1)",
-                    fontSize: 12,
-                  }}
-                />
+                <YAxis allowDecimals={false} tick={Y_AXIS_TICK} />
+                <Tooltip contentStyle={TOOLTIP_CONTENT_STYLE} />
                 <Legend verticalAlign="top" height={32} />
-                <Bar dataKey="pass" name="Pass" stackId="a" fill={OUTCOME_COLORS.pass} radius={[0, 0, 0, 0]} isAnimationActive={false} />
-                <Bar dataKey="fail" name="Fail" stackId="a" fill={OUTCOME_COLORS.fail} radius={[0, 0, 0, 0]} isAnimationActive={false} />
-                <Bar dataKey="skip" name="Skip" stackId="a" fill={OUTCOME_COLORS.skip} radius={[6, 6, 0, 0]} isAnimationActive={false} />
+                <Bar dataKey="pass" name="Pass" stackId="a" fill={OUTCOME_COLORS.pass} radius={STACK_FLAT_RADIUS} isAnimationActive={false} />
+                <Bar dataKey="fail" name="Fail" stackId="a" fill={OUTCOME_COLORS.fail} radius={STACK_FLAT_RADIUS} isAnimationActive={false} />
+                <Bar dataKey="skip" name="Skip" stackId="a" fill={OUTCOME_COLORS.skip} radius={STACK_TOP_RADIUS} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -529,12 +544,9 @@ export default function CommandCenter({
       {/* Interactive Sensor Scan Suite */}
       <SensorScanner
         clientId={clientId}
-        onScanComplete={(report, meta) => {
-          setLatestSensorScan(report);
-          setStoreMeta(meta);
-        }}
-        onSessionSaved={() => void load()}
-        onMetadataChange={(meta) => setStoreMeta(meta)}
+        onScanComplete={handleScanComplete}
+        onSessionSaved={handleSessionSaved}
+        onMetadataChange={setStoreMeta}
       />
 
       <div className="grid items-start gap-5 xl:grid-cols-[1.35fr_.65fr]">
