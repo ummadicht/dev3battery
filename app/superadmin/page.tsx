@@ -236,9 +236,34 @@ function Login({ onDone }: { onDone: (m: Me) => void }) {
 }
 
 // ── Portal shell: sidebar + wide main ──
-type Tab = "overview" | "exceptions" | "compliance" | "journey" | "desk" | "retail" | "sessions" | "regrade" | "audit" | "pricing" | "integrations" | "users";
+type Tab =
+  | "overview"
+  | "exceptions"
+  | "compliance"
+  | "journey"
+  | "desk"
+  | "retail"
+  | "sessions"
+  | "regrade"
+  | "audit"
+  | "pricing"
+  | "integrations"
+  | "users";
 
-const TABS: Tab[] = ["overview", "journey", "desk", "retail", "sessions", "regrade", "audit", "pricing", "integrations", "users"];
+const TABS: Tab[] = [
+  "overview",
+  "exceptions",
+  "compliance",
+  "journey",
+  "desk",
+  "retail",
+  "sessions",
+  "regrade",
+  "audit",
+  "pricing",
+  "integrations",
+  "users",
+];
 
 function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
   /**
@@ -262,6 +287,40 @@ function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
     const t = new URLSearchParams(window.location.search).get("tab") as Tab | null;
     return t && TABS.includes(t) ? t : "overview";
   });
+
+  // Sync the active tab to the URL query parameter (?tab=...) so refreshes stay on the current view
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("tab") !== tab) {
+      url.searchParams.set("tab", tab);
+      window.history.pushState({ tab }, "", url.toString());
+    }
+  }, [tab]);
+
+  // Keep tab state in sync when navigating with browser Back / Forward buttons
+  useEffect(() => {
+    const onPopState = () => {
+      const t = new URLSearchParams(window.location.search).get("tab") as Tab | null;
+      setTab(t && TABS.includes(t) ? t : "overview");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  // Stable callback references to prevent child useEffect infinite loops (React Error #185)
+  const handleOpenSession = useCallback((id: string) => {
+    setJumpSession(id);
+    setTab("sessions");
+  }, []);
+
+  const handleStartInspection = useCallback(() => {
+    setTab("desk");
+  }, []);
+
+  const handleJumped = useCallback(() => {
+    setJumpSession(null);
+  }, []);
 
   async function logout() {
     const r = await fetch(withBase("/api/portal/logout"), { method: "POST" }).catch(() => null);
@@ -401,7 +460,12 @@ function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
         {/* Mobile top bar */}
         <div className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-3 md:hidden" style={{ overflowX: "auto" }}>
           {NAV.map((n) => (
-            <button key={n.key} className="pill" style={{ fontWeight: 700, border: tab === n.key ? "2px solid var(--brand)" : "1px solid var(--border)" }} onClick={() => setTab(n.key)}>
+            <button
+              key={n.key}
+              className="pill"
+              style={{ fontWeight: 700, border: tab === n.key ? "2px solid var(--brand)" : "1px solid var(--border)" }}
+              onClick={() => setTab(n.key)}
+            >
               {n.label}
             </button>
           ))}
@@ -431,11 +495,8 @@ function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
           {tab === "overview" && (
             <CommandCenter
               clientId={client}
-              onOpenSession={(id) => {
-                setJumpSession(id);
-                setTab("sessions");
-              }}
-              onStartInspection={() => setTab("desk")}
+              onOpenSession={handleOpenSession}
+              onStartInspection={handleStartInspection}
             />
           )}
           {tab === "exceptions" && (
@@ -444,19 +505,13 @@ function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
               // Same hand-off CommandCenter already uses: park the id, switch to
               // the monitor, and let it open the detail. One path, so the queue
               // and the dashboard behave identically when you click a row.
-              onOpenSession={(id) => {
-                setJumpSession(id);
-                setTab("sessions");
-              }}
+              onOpenSession={handleOpenSession}
             />
           )}
           {tab === "compliance" && (
             <CompliancePanel
               clientId={client}
-              onOpenSession={(id) => {
-                setJumpSession(id);
-                setTab("sessions");
-              }}
+              onOpenSession={handleOpenSession}
             />
           )}
           {tab === "journey" && <JourneyEditor clientId={client} />}
@@ -466,27 +521,21 @@ function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
               clientId={client}
               isSuper={me.user.role === "super"}
               jumpTo={jumpSession}
-              onJumped={() => setJumpSession(null)}
+              onJumped={handleJumped}
             />
           )}
           {tab === "regrade" && (
             <RegradePanel
               clientId={client}
               isSuper={me.user.role === "super"}
-              onOpenSession={(id) => {
-                setJumpSession(id);
-                setTab("sessions");
-              }}
+              onOpenSession={handleOpenSession}
             />
           )}
           {tab === "audit" && (
             <AuditPanel
               clientId={client}
               isSuper={me.user.role === "super"}
-              onOpenSession={(id) => {
-                setJumpSession(id);
-                setTab("sessions");
-              }}
+              onOpenSession={handleOpenSession}
             />
           )}
           {tab === "retail" && <RetailPanel clientId={client} />}
@@ -498,7 +547,6 @@ function Portal({ me, onLogout }: { me: Me; onLogout: () => void }) {
     </div>
   );
 }
-
 // ── Journey editor — two-column on wide screens + sticky save bar ──
 function JourneyEditor({ clientId }: { clientId: string }) {
   const [journey, setJourney] = useState<ClientJourney | null>(null);
