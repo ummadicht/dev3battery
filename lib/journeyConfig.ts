@@ -53,7 +53,10 @@ export function journeyFor(clientId: string): ClientJourney {
   const id: ClientId = isClientId(clientId) ? clientId : "default";
   let stored: Partial<ClientJourney> = {};
   try {
-    const raw = getSetting(KEY(id));
+    let raw = getSetting(KEY(id));
+    if (!raw && id === "swapup") {
+      raw = getSetting(KEY("swapmore-in"));
+    }
     if (raw) stored = JSON.parse(raw);
   } catch {
     /* corrupt config must never break the flow — fall back to defaults */

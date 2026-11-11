@@ -104,9 +104,22 @@ const INZMAN: ClientTheme = {
   tagline: "90-second check — grade it on the spot.",
 };
 
+const SWAPUP: ClientTheme = {
+  ...SWAPMORE,
+  accent: "#0284c7",
+  accentSoft: "rgba(2,132,199,0.10)",
+  accentInk: "#0284c7",
+  ctaBg: "#0284c7",
+  ctaText: "#ffffff",
+  brandName: "SwapUp",
+  logoUrl: "",
+  tagline: "In-store trade-in check — fast and verified.",
+};
+
 export const THEMES: Record<ClientId, ClientTheme> = {
   swapmore: SWAPMORE,
   "swapmore-in": { ...SWAPMORE, brandName: "SwapMore India" },
+  swapup: SWAPUP,
   denovo: { ...GRADEIQ, brandName: "DeNovo" },
   inzman: INZMAN,
   default: GRADEIQ,

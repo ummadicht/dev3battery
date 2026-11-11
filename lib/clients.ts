@@ -9,7 +9,7 @@
 //   • ?client= on the v2 embed and session.client_id use the same ids.
 // A session records its client_id and every valuation routes on it.
 
-export type ClientId = "swapmore" | "swapmore-in" | "denovo" | "inzman" | "default";
+export type ClientId = "swapmore" | "swapmore-in" | "swapup" | "denovo" | "inzman" | "default";
 
 export interface ClientDef {
   id: ClientId;
@@ -22,6 +22,7 @@ export interface ClientDef {
 export const CLIENTS: Record<ClientId, ClientDef> = {
   swapmore: { id: "swapmore", name: "SwapMore US", currency: "USD", pricing: "swapmore" },
   "swapmore-in": { id: "swapmore-in", name: "SwapMore India", currency: "INR", pricing: "swapmore" },
+  swapup: { id: "swapup", name: "SwapUp", currency: "INR", pricing: "swapmore" },
   denovo: { id: "denovo", name: "DeNovo / SuperIQ", currency: "USD", pricing: "heuristic" },
   // India-exclusive retail vendor (Gadget Rebirth, Mumbai — the "Inzmam" account on
   // swapmore.vercel.app). Prices from a pricebook in ₹; until they push their own

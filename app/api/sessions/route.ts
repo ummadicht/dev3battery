@@ -10,11 +10,19 @@ import { isClientId } from "@/lib/clients";
 import { clientIpFrom } from "@/lib/uaInfo";
 import { deviceTokenFromCookie } from "@/lib/deviceToken";
 import { logEvent } from "@/lib/events";
-import { hasServerKey } from "@/lib/serverKey";
+import { hasServerKey, hasSwapupServerKey } from "@/lib/serverKey";
 
 // POST /api/sessions  { imei?, model?, segment?, demographic?, client?, channel? }  -> new session
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
+  const requestedClient = typeof body.client === "string" ? body.client.toLowerCase().trim() : "";
+  // SUP-162: SwapUp tenant requires server-side authentication BEFORE any IMEI
+  // lookup, database lookup, device inspection, or session creation.
+  if (requestedClient === "swapup") {
+    if (!hasSwapupServerKey(req)) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+  }
   const imei = String(body.imei ?? "").replace(/[^0-9]/g, "").slice(0, 15);
   let model = String(body.model ?? "").slice(0, 80);
   // Per-tenant: which client's pricing this session uses (swapmore → SwapMore prices).

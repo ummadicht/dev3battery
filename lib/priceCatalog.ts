@@ -27,10 +27,16 @@ export function currencyFor(clientId: string): Currency {
 
 /** The catalog in force for a client — saved if there is one, else the starter defaults. */
 export function catalogFor(clientId: string): StoredCatalog {
-  const currency = currencyFor(clientId);
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key(clientId)) as
+  const id = resolveClient(clientId).id;
+  const currency = currencyFor(id);
+  let row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key(id)) as
     | { value: string }
     | undefined;
+  if (!row && id === "swapup") {
+    row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key("swapmore-in")) as
+      | { value: string }
+      | undefined;
+  }
   if (!row) return { ...defaultCatalog(currency), source: "default" };
   try {
     const saved = JSON.parse(row.value) as { catalog?: unknown; updatedAt?: string; updatedBy?: string };

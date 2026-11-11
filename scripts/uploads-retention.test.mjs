@@ -84,7 +84,10 @@ const intakePhoto = file(`${intake}-1700000000000-0.jpg`, 400);
 const busy = session({ updatedDaysAgo: 3 }); // re-graded last week
 const busyPhoto = file(`${busy}-1700000000000-0.jpg`, 400);
 
-const swapup = session({ client: "swapmore-in" });
+const swapmoreIn = session({ client: "swapmore-in" });
+const swapmoreInPhoto = file(`${swapmoreIn}-1700000000000-0.jpg`, 400);
+
+const swapup = session({ client: "swapup" });
 const swapupPhoto = file(`${swapup}-1700000000000-0.jpg`, 400);
 
 const kycShot = file(`lens-${newSessionId()}.jpg`, 400);
@@ -95,7 +98,7 @@ db.prepare("INSERT INTO purchases (id, client_id, status, session_id, kyc) VALUE
 const orphan = file(`cam-${newSessionId()}.jpg`, 400); // its session is gone
 const orphanFresh = file(`lens-${newSessionId()}.jpg`, 5);
 
-const doomed = [openPhoto, openVideo, intakePhoto, swapupPhoto, orphan].sort();
+const doomed = [openPhoto, openVideo, intakePhoto, swapmoreInPhoto, swapupPhoto, orphan].sort();
 const all = fs.readdirSync(UPLOADS).sort();
 
 console.log("uploads retention (SUP-80)");
@@ -154,15 +157,17 @@ await t("--list names exactly the files it would remove", () => {
   assert.deepEqual(listed, doomed);
 });
 
-await t("--keep-client protects a tenant whose outcomes GradeIQ never sees (SwapUp)", () => {
-  const r = run("--list", "--keep-client", "swapmore-in");
+await t("--keep-client protects tenants whose outcomes GradeIQ never sees (SwapMore India & SwapUp)", () => {
+  const r = run("--list", "--keep-client", "swapmore-in,swapup");
   assert.match(r.stdout, /kept tenant/);
+  assert.ok(!r.stdout.includes(swapmoreInPhoto));
   assert.ok(!r.stdout.includes(swapupPhoto));
   const env = spawnSync(process.execPath, [SCRIPT, "--list"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, GRADEIQ_UPLOAD_RETENTION_KEEP_CLIENTS: "swapmore-in" },
+    env: { ...process.env, GRADEIQ_UPLOAD_RETENTION_KEEP_CLIENTS: "swapmore-in,swapup" },
   });
+  assert.ok(!env.stdout.includes(swapmoreInPhoto));
   assert.ok(!env.stdout.includes(swapupPhoto));
 });
 

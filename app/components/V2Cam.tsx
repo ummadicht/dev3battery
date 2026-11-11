@@ -436,6 +436,7 @@ export default function V2Cam({ sessionId, pass }: { sessionId: string; pass?: "
       try {
         const sess = await fetch(withBase(`/api/sessions/${sessionId}`)).then((r) => r.json());
         if (typeof sess?.profile?.app === "string") setSessionApp(sess.profile.app);
+        else if (sess?.client_id === "swapup") setSessionApp("swapup");
         const client = sess?.client_id || "default";
         const channel = sess?.profile?.channel || "consumer";
         const d = await fetch(withBase(`/api/journey/${client}/${channel}`)).then((r) => r.json());

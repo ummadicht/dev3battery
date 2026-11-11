@@ -94,7 +94,7 @@ export default function AuditPanel({
     <div className="flex flex-col gap-4">
       <section className="card p-4">
         <div className="flex flex-wrap items-center gap-2">
-          {isSuper && <Sel k="client" label="All clients" opts={["swapmore", "swapmore-in", "denovo", "default"]} />}
+          {isSuper && <Sel k="client" label="All clients" opts={["swapmore", "swapmore-in", "swapup", "denovo", "inzman", "default"]} />}
           <Sel k="model" label="All models" opts={facets.models} />
           <Sel k="grade" label="All grades" opts={facets.grades} />
           <Sel k="step" label="All steps" opts={facets.steps} />

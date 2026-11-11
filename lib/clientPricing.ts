@@ -151,7 +151,12 @@ export function marketBaseFor(
   model: string,
   modelId?: string,
 ): number | null {
-  const { book } = loadPricebook(clientId);
+  let { book } = loadPricebook(clientId);
+  const bookCur = (book?.currency as string) || "USD";
+  if (currency === "INR" && bookCur !== "INR" && clientId !== "swapmore-in") {
+    const india = loadPricebook("swapmore-in");
+    if (((india.book.currency as string) || "USD") === "INR") book = india.book;
+  }
   if (!book || (book.currency && book.currency !== currency)) return null;
   const m = findModel(book, { id: modelId, name: model });
   return m ? m.basePrice : null;

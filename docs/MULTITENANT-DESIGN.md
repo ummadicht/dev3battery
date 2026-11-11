@@ -29,6 +29,7 @@ Seed rows are exactly today's `CLIENTS` registry:
 ```
 swapmore     SwapMore US        USD  pricing=swapmore
 swapmore-in  SwapMore India     INR  pricing=swapmore
+swapup       SwapUp             INR  pricing=swapmore
 denovo       DeNovo / SuperIQ   USD  pricing=heuristic
 inzman       Gadget Rebirth     INR  pricing=swapmore
 default      GradeIQ            EUR  pricing=heuristic

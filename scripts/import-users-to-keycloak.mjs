@@ -68,7 +68,7 @@ const BUILTINS = [
   { username: "swapmoreind", role: "client", clientId: "swapmore-in" },
   { username: "inzman", role: "client", clientId: "inzman" },
 ];
-const KNOWN_CLIENTS = ["swapmore", "swapmore-in", "denovo", "inzman", "default"]; // lib/clients.ts
+const KNOWN_CLIENTS = ["swapmore", "swapmore-in", "swapup", "denovo", "inzman", "default"]; // lib/clients.ts
 
 function loadStored() {
   if (!DB_PATH) {

@@ -19,6 +19,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
  * but anonymous use.
  */
 export const SERVER_KEY_HEADER = "x-gradeiq-server-key";
+export const SWAPUP_KEY_HEADER = "x-swapup-server-key";
 
 /**
  * CounterIQ's retail desks, server to server (SUP-72).
@@ -36,10 +37,7 @@ export const SERVER_KEY_HEADER = "x-gradeiq-server-key";
  */
 export const RETAIL_KEY_HEADER = "x-gradeiq-retail-key";
 
-/** Does `header` carry the secret in env `name`? False when either is empty. */
-function carriesSecret(req: Request, header: string, name: string): boolean {
-  const want = (process.env[name] || "").trim();
-  const got = (req.headers.get(header) || "").trim();
+function safeMatch(got: string, want: string): boolean {
   if (!want || !got) return false;
   // Compare digests, not the strings: equal length always, so timingSafeEqual
   // neither throws on a short guess nor leaks the key's length.
@@ -48,9 +46,51 @@ function carriesSecret(req: Request, header: string, name: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-/** True only when GRADEIQ_SERVER_KEY is set AND this request carries it. */
+/** Does `header` carry the secret in env `name`? False when either is empty. */
+function carriesSecret(req: Request, header: string, name: string): boolean {
+  const want = (process.env[name] || "").trim();
+  const got = (req.headers.get(header) || "").trim();
+  return safeMatch(got, want);
+}
+
+function extractServerKeyCandidates(req: Request): string[] {
+  const out: string[] = [];
+  for (const h of [SWAPUP_KEY_HEADER, SERVER_KEY_HEADER]) {
+    const v = (req.headers.get(h) || "").trim();
+    if (v) out.push(v);
+  }
+  const auth = (req.headers.get("authorization") || "").trim();
+  if (/^bearer\s+/i.test(auth)) {
+    const token = auth.replace(/^bearer\s+/i, "").trim();
+    if (token) out.push(token);
+  }
+  return out;
+}
+
+/**
+ * True only when SwapUp server authentication is configured (`SWAPUP_SERVER_KEY`
+ * or `GRADEIQ_SERVER_KEY`) AND this request carries a matching key.
+ * When `SWAPUP_SERVER_KEY` is set, it is enforced; when unset, `GRADEIQ_SERVER_KEY`
+ * is accepted for backward compatibility. If neither is set, returns false.
+ */
+export function hasSwapupServerKey(req: Request): boolean {
+  const swapupWant = (process.env.SWAPUP_SERVER_KEY || "").trim();
+  const gradeiqWant = (process.env.GRADEIQ_SERVER_KEY || "").trim();
+  const candidates = extractServerKeyCandidates(req);
+  if (!candidates.length) return false;
+  if (swapupWant) {
+    return candidates.some((c) => safeMatch(c, swapupWant));
+  }
+  if (gradeiqWant) {
+    return candidates.some((c) => safeMatch(c, gradeiqWant));
+  }
+  return false;
+}
+
+/** True only when GRADEIQ_SERVER_KEY or SWAPUP_SERVER_KEY is set AND this request carries it. */
 export function hasServerKey(req: Request): boolean {
-  return carriesSecret(req, SERVER_KEY_HEADER, "GRADEIQ_SERVER_KEY");
+  if (carriesSecret(req, SERVER_KEY_HEADER, "GRADEIQ_SERVER_KEY")) return true;
+  return hasSwapupServerKey(req);
 }
 
 /** True only when GRADEIQ_RETAIL_KEY is set AND this request carries it. */

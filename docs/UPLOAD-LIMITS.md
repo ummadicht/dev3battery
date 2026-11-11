@@ -83,7 +83,7 @@ yet show it specially (the tablet treats any non-422 answer to `/cosmetic` as
 ```
 node scripts/uploads-retention.mjs                         # dry run: totals
 node scripts/uploads-retention.mjs --list                  # dry run: every file it would remove
-node scripts/uploads-retention.mjs --days 365 --keep-client swapmore-in
+node scripts/uploads-retention.mjs --days 365 --keep-client swapmore-in,swapup
 node scripts/uploads-retention.mjs --apply                 # actually delete
 ```
 
@@ -107,7 +107,8 @@ the file name starts with its id. Files no session owns go by age alone.
 
 **Before `--apply`:** GradeIQ only knows the outcomes it records. SwapUp never
 calls `/accept` and CounterIQ keeps its purchases in its own database, so their
-sessions never read as final here — protect them with `--keep-client` (SwapUp is
-`swapmore-in`) until they report back. A removed file leaves the session's
-reference in place: the report shows a missing picture. Nothing schedules this
-job; scheduling it (and the age) is the owner's decision.
+sessions never read as final here — protect them with `--keep-client` (both
+`swapmore-in` for SwapMore India / historical sessions and `swapup` for SwapUp)
+until they report back. A removed file leaves the session's reference in place:
+the report shows a missing picture. Nothing schedules this job; scheduling it
+(and the age) is the owner's decision.

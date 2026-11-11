@@ -27,13 +27,14 @@
 // SwapUp never calls /accept and CounterIQ keeps its purchases in its own
 // database, so their sessions never read as final here — a trade they paid out
 // would lose its photos at 180 days. Until they report back, protect them:
-// --keep-client swapmore-in (SwapUp) and the CounterIQ tenants. Removing a file
-// leaves the session's reference in place: the report shows a missing picture.
+// --keep-client swapmore-in,swapup (SwapMore India & SwapUp) and the CounterIQ
+// tenants. Removing a file leaves the session's reference in place: the report
+// shows a missing picture.
 //
 // Usage (from the app directory — on the VM, ~/gradeiq):
 //   node scripts/uploads-retention.mjs                       dry run, totals only
 //   node scripts/uploads-retention.mjs --list                dry run, every file it would remove
-//   node scripts/uploads-retention.mjs --days 365 --keep-client swapmore-in,inzman
+//   node scripts/uploads-retention.mjs --days 365 --keep-client swapmore-in,swapup,inzman
 //   node scripts/uploads-retention.mjs --apply               remove them
 //   --data <dir>   the data directory (default ./data: gradeiq.db + uploads/)
 //
