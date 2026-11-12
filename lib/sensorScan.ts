@@ -213,6 +213,31 @@ export async function scanGyroscope(timeoutMs = 750): Promise<SensorScanItem> {
     };
   }
 
+  try {
+    const doEv = DeviceOrientationEvent as unknown as {
+      requestPermission?: () => Promise<"granted" | "denied">;
+    };
+    if (typeof doEv.requestPermission === "function") {
+      const perm = await doEv.requestPermission();
+      if (perm !== "granted") {
+        return {
+          id: "gyroscope",
+          functionalKey: "gyroscope",
+          name: "Gyroscope & Orientation",
+          category: "Motion",
+          api: "DeviceOrientationEvent",
+          status: "fail",
+          reading: "Orientation permission denied by user",
+          metrics: { permission: perm },
+          durationMs: Math.round(performance.now() - t0),
+          scannedAt,
+        };
+      }
+    }
+  } catch {
+    /* non-gesture context on iOS or desktop browser */
+  }
+
   return new Promise<SensorScanItem>((resolve) => {
     let settled = false;
     const handler = (ev: DeviceOrientationEvent) => {
@@ -261,14 +286,14 @@ export async function scanGyroscope(timeoutMs = 750): Promise<SensorScanItem> {
 }
 
 /** 3. Scan Magnetometer / Compass Heading */
-export async function scanMagnetometer(timeoutMs = 700): Promise<SensorScanItem> {
+export async function scanMagnetometer(timeoutMs = 850): Promise<SensorScanItem> {
   const t0 = performance.now();
   const scannedAt = new Date().toISOString();
 
   if (typeof window === "undefined") {
     return {
       id: "magnetometer",
-      functionalKey: "magnetometer",
+      functionalKey: "compass",
       name: "Magnetometer / Compass",
       category: "Motion",
       api: "Compass Heading / Absolute Orientation",
@@ -280,45 +305,71 @@ export async function scanMagnetometer(timeoutMs = 700): Promise<SensorScanItem>
     };
   }
 
+  try {
+    const doEv = (window as any).DeviceOrientationEvent as
+      | { requestPermission?: () => Promise<"granted" | "denied"> }
+      | undefined;
+    if (doEv && typeof doEv.requestPermission === "function") {
+      await doEv.requestPermission();
+    }
+  } catch {
+    /* ignore if already granted or non-gesture */
+  }
+
   return new Promise<SensorScanItem>((resolve) => {
     let settled = false;
-    const handler = (ev: DeviceOrientationEvent) => {
-      const webkitHeading = (ev as DeviceOrientationEvent & { webkitCompassHeading?: number })
-        .webkitCompassHeading;
-      const heading =
-        typeof webkitHeading === "number"
-          ? webkitHeading
-          : ev.absolute && typeof ev.alpha === "number"
-            ? (360 - ev.alpha) % 360
-            : null;
-      if (heading === null) return;
+    let fallbackDeg: number | null = null;
+
+    const finishWith = (deg: number, calibrated: boolean) => {
+      if (settled) return;
       settled = true;
       window.removeEventListener("deviceorientationabsolute" as any, handler);
       window.removeEventListener("deviceorientation", handler);
-      const deg = Number(heading.toFixed(1));
+      const rounded = Number(((deg % 360) + 360) % 360).toFixed(1);
+      const numDeg = Number(rounded);
       resolve({
         id: "magnetometer",
-        functionalKey: "magnetometer",
+        functionalKey: "compass",
         name: "Magnetometer / Compass",
         category: "Motion",
         api: "Compass Heading / Absolute Orientation",
         status: "pass",
-        reading: `Heading ${deg}° (${cardinalDirection(deg)})`,
-        metrics: { headingDeg: deg, direction: cardinalDirection(deg) },
+        reading: `Heading ${numDeg}° (${cardinalDirection(numDeg)})${calibrated ? "" : " · relative"}`,
+        metrics: { headingDeg: numDeg, direction: cardinalDirection(numDeg), calibrated },
         durationMs: Math.round(performance.now() - t0),
         scannedAt,
       });
+    };
+
+    const handler = (ev: DeviceOrientationEvent) => {
+      const webkitHeading = (ev as DeviceOrientationEvent & { webkitCompassHeading?: number })
+        .webkitCompassHeading;
+      if (typeof webkitHeading === "number" && Number.isFinite(webkitHeading)) {
+        finishWith(webkitHeading, true);
+        return;
+      }
+      if (ev.absolute && typeof ev.alpha === "number" && Number.isFinite(ev.alpha)) {
+        finishWith((360 - ev.alpha) % 360, true);
+        return;
+      }
+      if (typeof ev.alpha === "number" && Number.isFinite(ev.alpha)) {
+        fallbackDeg = (360 - ev.alpha) % 360;
+      }
     };
 
     window.addEventListener("deviceorientationabsolute" as any, handler, { passive: true });
     window.addEventListener("deviceorientation", handler, { passive: true });
     window.setTimeout(() => {
       if (settled) return;
+      if (fallbackDeg !== null) {
+        finishWith(fallbackDeg, false);
+        return;
+      }
       window.removeEventListener("deviceorientationabsolute" as any, handler);
       window.removeEventListener("deviceorientation", handler);
       resolve({
         id: "magnetometer",
-        functionalKey: "magnetometer",
+        functionalKey: "compass",
         name: "Magnetometer / Compass",
         category: "Motion",
         api: "Compass Heading / Absolute Orientation",
@@ -766,6 +817,10 @@ export async function runFullSensorScan(
       const pts = Number(item.metrics.maxTouchPoints ?? 0);
       functionalMap.multitouch = pts >= 2 ? "pass" : "skip";
       functionalMap.vibration = item.metrics.vibrationApi ? "pass" : "skip";
+    }
+    if (item.id === "magnetometer") {
+      functionalMap.magnetometer = item.status;
+      functionalMap.compass = item.status;
     }
   }
 

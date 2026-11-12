@@ -111,6 +111,8 @@ export default function BubbleTouch({ onDone }: { onDone: (touch: Res, multitouc
     if (allSingles && multiBurstRef.current) setTimeout(finish, 250);
   }
 
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+
   // Pop any single bubble under a point (tap or swipe).
   function popAt(clientX: number, clientY: number) {
     const rect = padRef.current?.getBoundingClientRect();
@@ -129,32 +131,54 @@ export default function BubbleTouch({ onDone }: { onDone: (touch: Res, multitouc
         changed = true;
       }
     }
+    // If multi-touch was already proven earlier (2+ fingers seen), tapping the
+    // 2-finger tile with even 1 finger also clears it so the user is never stuck.
+    if (!multiBurstRef.current && maxTouchRef.current >= 2 && col === multi.col && row === multi.row) {
+      multiBurstRef.current = true;
+      changed = true;
+    }
     if (changed) { tick(); maybeComplete(); }
   }
 
-  function onPointer(e: React.PointerEvent) {
-    if (e.type === "pointerdown") goFullscreen();
-    if (e.type === "pointermove" && e.buttons === 0) return;
+  function recordMultiTouch(count: number) {
+    if (count > maxTouchRef.current) maxTouchRef.current = count;
+    // Standard multi-touch: 2+ simultaneous fingers anywhere on the screen
+    // clears the 2-finger tile immediately (fitting two adult fingertips inside
+    // a single ~60px cell is physically unreliable).
+    if (count >= 2 && !multiBurstRef.current) {
+      multiBurstRef.current = true;
+      tick();
+      maybeComplete();
+    }
+  }
+
+  function onPointerDown(e: React.PointerEvent) {
+    goFullscreen();
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    recordMultiTouch(activePointersRef.current.size);
     popAt(e.clientX, e.clientY);
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      recordMultiTouch(activePointersRef.current.size);
+    } else if (e.buttons === 0) {
+      return;
+    }
+    popAt(e.clientX, e.clientY);
+  }
+
+  function onPointerUp(e: React.PointerEvent) {
+    activePointersRef.current.delete(e.pointerId);
   }
 
   function onTouch(e: React.TouchEvent) {
     goFullscreen();
-    maxTouchRef.current = Math.max(maxTouchRef.current, e.touches.length);
-    const rect = padRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const W = rect.width, H = rect.height;
+    recordMultiTouch(e.touches.length);
     // Single pops for each finger.
-    for (let k = 0; k < e.touches.length; k++) popAt(e.touches[k].clientX, e.touches[k].clientY);
-    // Multi-touch burst: 2+ fingers inside the special bubble at once.
-    if (!multiBurstRef.current) {
-      let inside = 0;
-      for (let k = 0; k < e.touches.length; k++) {
-        const c = Math.floor(((e.touches[k].clientX - rect.left) / W) * COLS);
-        const r2 = Math.floor(((e.touches[k].clientY - rect.top) / H) * ROWS);
-        if (c === multi.col && r2 === multi.row) inside++;
-      }
-      if (inside >= 2) { multiBurstRef.current = true; tick(); maybeComplete(); }
+    for (let k = 0; k < e.touches.length; k++) {
+      popAt(e.touches[k].clientX, e.touches[k].clientY);
     }
   }
 
@@ -172,7 +196,7 @@ export default function BubbleTouch({ onDone }: { onDone: (touch: Res, multitouc
       >
         <h1 className="text-lg font-extrabold text-white">Clear every square</h1>
         <p className="mt-0.5 text-[13px] text-white/75">
-          Tap or swipe over them all · the <span style={{ color: "var(--gold-2)" }}>2-finger</span> square needs both fingers
+          Tap or swipe over them all · touch with <span style={{ color: "var(--gold-2)" }}>2 fingers at once</span> to clear the 2-finger square
         </p>
         <div className="mt-1 text-[12px] text-white/70">
           {poppedSingles}/{singles.length} cleared · multi-touch {multiBurstRef.current ? "✓" : "—"}
@@ -182,8 +206,10 @@ export default function BubbleTouch({ onDone }: { onDone: (touch: Res, multitouc
       <div
         ref={padRef}
         className="absolute inset-0 touch-none select-none"
-        onPointerDown={onPointer}
-        onPointerMove={onPointer}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
         onTouchStart={onTouch}
         onTouchMove={onTouch}
       >

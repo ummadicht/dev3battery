@@ -131,37 +131,61 @@ function TouchGame({ onDone, scale = 1 }: GameProps) {
 
 /* ---------- 2. Multi-touch: pinch the star ---------- */
 function MultiTouchGame({ test, onDone, strict }: GameProps) {
-  const NEED = 3;
+  // 2 fingers is standard multi-touch and avoids OS 3-finger screenshot gestures.
+  const NEED = 2;
   const [max, setMax] = useState(0);
   const [fingers, setFingers] = useState(0);
+  const pointersRef = useRef<Set<number>>(new Set());
+
+  function updateCount(n: number) {
+    setFingers(n);
+    setMax((m) => Math.max(m, n));
+  }
+
   useEffect(() => {
     if (max >= NEED) {
       const t = setTimeout(() => onDone("pass"), 400);
       return () => clearTimeout(t);
     }
   }, [max, onDone]);
+
   return (
     <GameShell test={test} onDone={onDone} strict={strict}>
       <div
-        className="grid h-full place-items-center touch-none"
-        onTouchStart={(e) => {
-          setFingers(e.touches.length);
-          setMax((m) => Math.max(m, e.touches.length));
-        }}
+        className="grid h-full place-items-center touch-none select-none"
+        onTouchStart={(e) => updateCount(e.touches.length)}
+        onTouchMove={(e) => updateCount(e.touches.length)}
         onTouchEnd={(e) => setFingers(e.touches.length)}
+        onPointerDown={(e) => {
+          pointersRef.current.add(e.pointerId);
+          updateCount(pointersRef.current.size);
+        }}
+        onPointerMove={(e) => {
+          if (pointersRef.current.has(e.pointerId)) {
+            updateCount(pointersRef.current.size);
+          }
+        }}
+        onPointerUp={(e) => {
+          pointersRef.current.delete(e.pointerId);
+          setFingers(pointersRef.current.size);
+        }}
+        onPointerCancel={(e) => {
+          pointersRef.current.delete(e.pointerId);
+          setFingers(pointersRef.current.size);
+        }}
       >
         <div className="text-center">
           <div
             className="text-7xl transition-transform"
-            style={{ transform: `scale(${1 + fingers * 0.15})` }}
+            style={{ transform: `scale(${1 + fingers * 0.2})` }}
           >
             ⭐
           </div>
           <p className="mt-4 text-lg font-bold">
-            {max >= NEED ? "Nice! 🎉" : `Place ${NEED} fingers at once`}
+            {max >= NEED ? "Nice! 🎉" : `Place ${NEED} fingers on screen at once`}
           </p>
           <p className="text-sm text-[var(--muted)]">
-            most fingers seen: {max}
+            most fingers seen: {max} / {NEED}
           </p>
         </div>
       </div>
@@ -268,6 +292,7 @@ function MotionGame({ test, onDone, strict }: GameProps) {
   const inHole = useRef(0);
 
   function handle(e: DeviceOrientationEvent) {
+    if (e.gamma === null && e.beta === null && e.alpha === null) return;
     setActive(true);
     const gx = Math.max(-30, Math.min(30, e.gamma ?? 0)); // left/right
     const gy = Math.max(-30, Math.min(30, (e.beta ?? 0) - 40)); // front/back
@@ -296,12 +321,13 @@ function MotionGame({ test, onDone, strict }: GameProps) {
   }
   // ball near center target ⇒ pass after brief hold
   useEffect(() => {
+    if (!active) return;
     const d = Math.hypot(pos.x, pos.y);
     if (d < 0.18) {
       inHole.current += 1;
       if (inHole.current > 8) onDone("pass");
     } else inHole.current = 0;
-  }, [pos, onDone]);
+  }, [pos, active, onDone]);
 
   return (
     <GameShell test={test} onDone={onDone} strict={strict}>
@@ -330,6 +356,118 @@ function MotionGame({ test, onDone, strict }: GameProps) {
           </p>
         </div>
       )}
+    </GameShell>
+  );
+}
+
+/* ---------- 4b. Compass / Magnetometer: rotate to verify heading ---------- */
+function CompassGame({ test, onDone, strict }: GameProps) {
+  const [heading, setHeading] = useState<number | null>(null);
+  const [needPerm, setNeedPerm] = useState(false);
+  const [sweep, setSweep] = useState(0);
+  const startHeadingRef = useRef<number | null>(null);
+  const maxSweepRef = useRef(0);
+  const doneRef = useRef(false);
+
+  const cardinal = (deg: number) => {
+    const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    return dirs[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+  };
+
+  function onOrient(ev: DeviceOrientationEvent) {
+    const wk = (ev as DeviceOrientationEvent & { webkitCompassHeading?: number })
+      .webkitCompassHeading;
+    const raw =
+      typeof wk === "number" && Number.isFinite(wk)
+        ? wk
+        : typeof ev.alpha === "number" && Number.isFinite(ev.alpha)
+          ? (360 - ev.alpha) % 360
+          : null;
+    if (raw === null) return;
+    const deg = Math.round(((raw % 360) + 360) % 360);
+    setHeading(deg);
+    if (startHeadingRef.current === null) {
+      startHeadingRef.current = deg;
+    } else {
+      const diff = Math.abs((((deg - startHeadingRef.current + 540) % 360) - 180));
+      if (diff > maxSweepRef.current) {
+        maxSweepRef.current = diff;
+        setSweep(diff);
+      }
+      if (maxSweepRef.current >= 20 && !doneRef.current) {
+        doneRef.current = true;
+        setTimeout(() => onDone("pass"), 350);
+      }
+    }
+  }
+
+  useEffect(() => {
+    const AnyOrient = window.DeviceOrientationEvent as any;
+    if (AnyOrient && typeof AnyOrient.requestPermission === "function") {
+      setNeedPerm(true);
+    } else {
+      window.addEventListener("deviceorientationabsolute" as any, onOrient, { passive: true });
+      window.addEventListener("deviceorientation", onOrient, { passive: true });
+      return () => {
+        window.removeEventListener("deviceorientationabsolute" as any, onOrient);
+        window.removeEventListener("deviceorientation", onOrient);
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function grant() {
+    try {
+      const AnyOrient = window.DeviceOrientationEvent as any;
+      const res = await AnyOrient.requestPermission();
+      if (res === "granted") {
+        window.addEventListener("deviceorientationabsolute" as any, onOrient, { passive: true });
+        window.addEventListener("deviceorientation", onOrient, { passive: true });
+        setNeedPerm(false);
+      }
+    } catch {
+      /* denied */
+    }
+  }
+
+  return (
+    <GameShell test={test} onDone={onDone} strict={strict}>
+      <div className="grid h-full place-items-center p-6 text-center">
+        {needPerm ? (
+          <button className="btn" onClick={grant}>
+            🧭 Enable compass sensor
+          </button>
+        ) : (
+          <div className="flex flex-col items-center">
+            <div className="relative grid h-36 w-36 place-items-center rounded-full border-2 border-[var(--border)] bg-[var(--card)]">
+              <div
+                className="text-5xl transition-transform duration-100"
+                style={{
+                  transform: `rotate(${heading !== null ? -heading : 0}deg)`,
+                }}
+              >
+                🧭
+              </div>
+            </div>
+            <p className="mt-4 text-xl font-extrabold tabular-nums">
+              {heading !== null ? `${heading}° ${cardinal(heading)}` : "Waiting for compass…"}
+            </p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              {heading !== null
+                ? `Rotate the phone slightly (${Math.min(20, sweep)}° / 20°)`
+                : "Rotate the phone flat in your hand"}
+            </p>
+            {heading !== null && (
+              <button
+                className="btn btn-good mt-4"
+                onClick={() => onDone("pass")}
+              >
+                ✓ Compass works
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </GameShell>
   );
 }
@@ -425,11 +563,6 @@ function MicGame({ test, onDone, strict }: GameProps) {
 }
 
 /* ---------- 6. Speaker: acoustic loopback (objective — see lib/speakerTest.ts) ---------- */
-// Used to be a "guess the pitch" mini-game: tests nothing (a broken speaker
-// still gets guessed right half the time, a working one can fail on a
-// mis-click). Now plays a tone and listens for it via the mic, same as the
-// automatic /screen flow — asking the seller is a rare last resort, not the
-// primary check.
 function SpeakerGame({ test, onDone, strict }: GameProps) {
   const [phase, setPhase] = useState<"idle" | "testing" | "asking">("idle");
   const acRef = useRef<AudioContext | null>(null);
@@ -451,7 +584,6 @@ function SpeakerGame({ test, onDone, strict }: GameProps) {
       return;
     }
     if (!result.ac) {
-      // No mic at all — can't attempt the loopback or even a manual fallback tone.
       onDone("fail");
       return;
     }
@@ -504,9 +636,6 @@ function SpeakerGame({ test, onDone, strict }: GameProps) {
 }
 
 /* ---------- 7. Cameras: model-aware, per-lens focus test ---------- */
-// Live sharpness (Laplacian variance) on a center crop — the basis of the focus
-// test: a working lens goes from blurry (non-focus) to sharp (focus) as
-// autofocus engages; a dead/stuck lens never sharpens.
 function sharpness(v: HTMLVideoElement): number {
   const vw = v.videoWidth,
     vh = v.videoHeight;
@@ -541,35 +670,22 @@ function sharpness(v: HTMLVideoElement): number {
   return m ? lSum2 / m - (lSum / m) ** 2 : 0;
 }
 
-const FOCUS_SHARP = 60; // above → in focus
+const FOCUS_SHARP = 50; // above → in focus
 const BLUR_SHARP = 22; // below → out of focus (non-focus baseline)
 
 function CameraGame({ test, onDone, model = "" }: GameProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  // Lazy import keeps the game bundle lean; lenses drive the checklist.
   const lenses = useMemo(() => lensesFor(model), [model]);
   const [idx, setIdx] = useState(0);
   const [status, setStatus] = useState<Record<string, "pending" | "pass">>({});
   const [rearIds, setRearIds] = useState<string[]>([]);
   const [err, setErr] = useState("");
   const [sharp, setSharp] = useState(0);
-  const [sawBlur, setSawBlur] = useState(false); // observed a non-focus frame
-  const sharpStreakRef = useRef(0); // consecutive sharp frames (fallback pass)
+  const [sawBlur, setSawBlur] = useState(false);
+  const sharpStreakRef = useRef(0);
+  const advancingRef = useRef(false);
   const lens = lenses[idx];
   const done = idx >= lenses.length;
-
-  // Enumerate rear cameras once (Android exposes several; iOS usually one).
-  useEffect(() => {
-    navigator.mediaDevices
-      ?.enumerateDevices?.()
-      .then((d) => {
-        const rears = d.filter(
-          (x) => x.kind === "videoinput" && !/front|user|face/i.test(x.label)
-        );
-        setRearIds(rears.map((x) => x.deviceId).filter(Boolean));
-      })
-      .catch(() => {});
-  }, []);
 
   // Acquire the stream for the active lens. Prefer a distinct rear deviceId per
   // rear lens when the platform exposes them; else fall back to facingMode.
@@ -579,15 +695,13 @@ function CameraGame({ test, onDone, model = "" }: GameProps) {
     let stream: MediaStream | null = null;
     setSawBlur(false);
     setSharp(0);
+    setErr("");
     sharpStreakRef.current = 0;
+    advancingRef.current = false;
     (async () => {
       try {
         const rearSeq = lenses.filter((l) => l.facing === "rear");
         const rearPos = rearSeq.findIndex((l) => l.id === lens.id);
-        // Try, in order: the exact rear deviceId (Android multi-lens), then an
-        // ideal facingMode, then plain video — so the feed starts even when a
-        // device rejects the specific constraint (the usual "camera not working"
-        // / blank-feed cause on iOS Safari).
         const tries: MediaStreamConstraints[] = [];
         if (lens.facing === "rear" && rearIds[rearPos])
           tries.push({ video: { deviceId: { exact: rearIds[rearPos] } } });
@@ -608,13 +722,25 @@ function CameraGame({ test, onDone, model = "" }: GameProps) {
           }
         }
         if (!s) throw new Error("no camera available");
-        // Lens switched / unmounted mid-acquire → release now, or the next lens's
-        // getUserMedia aborts ("operation was aborted") because the camera is busy.
         if (cancelled) {
           s.getTracks().forEach((t) => t.stop());
           return;
         }
         stream = s;
+        // Re-enumerate AFTER getUserMedia permission is granted so rearIds has
+        // populated deviceIds and labels.
+        if (rearIds.length === 0) {
+          navigator.mediaDevices
+            ?.enumerateDevices?.()
+            .then((d) => {
+              const rears = d.filter(
+                (x) => x.kind === "videoinput" && !/front|user|face|selfie/i.test(x.label)
+              );
+              const ids = rears.map((x) => x.deviceId).filter(Boolean);
+              if (ids.length > 0) setRearIds(ids);
+            })
+            .catch(() => {});
+        }
         if (videoRef.current) {
           videoRef.current.srcObject = s;
           videoRef.current.setAttribute("playsinline", "true");
@@ -628,28 +754,34 @@ function CameraGame({ test, onDone, model = "" }: GameProps) {
       cancelled = true;
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [idx, done, lens, rearIds, lenses]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, done, lens, lenses]);
+
+  function passCurrentLens() {
+    if (!lens || advancingRef.current) return;
+    advancingRef.current = true;
+    setStatus((m) => ({ ...m, [lens.id]: "pass" }));
+    setTimeout(() => setIdx((i) => i + 1), 500);
+  }
 
   // Focus loop: watch sharpness. A lens passes once we've seen it BOTH blurry
-  // and sharp (autofocus demonstrably works). Auto-advances.
+  // and sharp (autofocus demonstrably works) or sustained sharp frames.
   useEffect(() => {
     if (done || err) return;
     const t = setInterval(() => {
       const v = videoRef.current;
-      if (!v || v.readyState < 2) return;
+      if (!v || v.readyState < 2 || advancingRef.current) return;
       const s = sharpness(v);
       setSharp(s);
       if (s < BLUR_SHARP) setSawBlur(true);
       sharpStreakRef.current = s > FOCUS_SHARP ? sharpStreakRef.current + 1 : 0;
-      // Pass on proven autofocus (blur→sharp) OR a sharp feed sustained ~3s — a
-      // steady clear image proves the lens works even if the scene never blurred.
-      const proven = sawBlur || sharpStreakRef.current >= 18;
+      const proven = sawBlur || sharpStreakRef.current >= 12;
       if (s > FOCUS_SHARP && proven && lens && status[lens.id] !== "pass") {
-        setStatus((m) => ({ ...m, [lens.id]: "pass" }));
-        setTimeout(() => setIdx((i) => i + 1), 600);
+        passCurrentLens();
       }
     }, 160);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done, err, sawBlur, lens, status]);
 
   if (done) {
@@ -658,7 +790,7 @@ function CameraGame({ test, onDone, model = "" }: GameProps) {
         <div className="grid h-full place-items-center p-6 text-center">
           <div>
             <div className="text-5xl">📸</div>
-            <p className="mt-3 font-bold">All {lenses.length} lenses focused ✓</p>
+            <p className="mt-3 font-bold">All {lenses.length} lenses checked ✓</p>
             <button className="btn mt-5" onClick={() => onDone("pass")}>
               ✓ Cameras pass
             </button>
@@ -669,7 +801,7 @@ function CameraGame({ test, onDone, model = "" }: GameProps) {
   }
 
   const pct = Math.min(100, Math.round((sharp / FOCUS_SHARP) * 100));
-  const focused = sharp > FOCUS_SHARP && sawBlur;
+  const focused = sharp > FOCUS_SHARP && (sawBlur || sharpStreakRef.current >= 12);
 
   return (
     <GameShell test={test} onDone={onDone} hideFail>
@@ -712,7 +844,7 @@ function CameraGame({ test, onDone, model = "" }: GameProps) {
         )}
         <p className="mt-2 text-center text-sm font-semibold">
           {lens?.facing === "front" ? "Front camera" : lens?.name} —{" "}
-          {focused ? "focused ✓" : sawBlur ? "let it sharpen…" : "point at something, then hold"}
+          {focused ? "focused ✓" : sawBlur ? "let it sharpen…" : "point at something textured"}
         </p>
         {/* focus meter */}
         <div className="mt-1 h-2 w-full max-w-xs overflow-hidden rounded-full bg-[var(--card-2)]">
@@ -724,19 +856,108 @@ function CameraGame({ test, onDone, model = "" }: GameProps) {
             }}
           />
         </div>
-        <div className="mt-auto flex w-full gap-2 pt-3">
+        <div className="mt-auto flex w-full flex-wrap gap-2 pt-3">
+          {!err && (
+            <button
+              className="btn btn-good flex-1"
+              onClick={passCurrentLens}
+            >
+              ✓ Lens is clear
+            </button>
+          )}
           <button
             className="btn btn-bad flex-1"
             onClick={() => onDone("fail")}
           >
-            ✕ This lens is broken
+            ✕ Broken
           </button>
           <button
-            className="btn btn-ghost flex-1"
+            className="btn btn-ghost"
             onClick={() => setIdx((i) => i + 1)}
           >
-            Skip lens →
+            Skip →
           </button>
+        </div>
+      </div>
+    </GameShell>
+  );
+}
+
+/* ---------- 7b. Biometrics (Face ID / Touch ID / Fingerprint) ---------- */
+function BiometricGame({ test, onDone, strict }: GameProps) {
+  const [state, setState] = useState<"idle" | "running" | "error">("idle");
+  const [errMsg, setErrMsg] = useState("");
+
+  async function verifyBiometric() {
+    setState("running");
+    setErrMsg("");
+    try {
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      const userId = crypto.getRandomValues(new Uint8Array(16));
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge,
+          rp: { name: "GradeIQ", id: window.location.hostname },
+          user: {
+            id: userId,
+            name: "gradeiq-biometric-check",
+            displayName: "GradeIQ Biometric Check",
+          },
+          pubKeyCredParams: [
+            { type: "public-key", alg: -7 },
+            { type: "public-key", alg: -257 },
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: "platform",
+            userVerification: "required",
+          },
+          timeout: 60000,
+          attestation: "none",
+        },
+      } as any);
+      if (cred) {
+        onDone("pass");
+        return;
+      }
+      setState("error");
+      setErrMsg("Biometric prompt did not return a credential.");
+    } catch {
+      setState("error");
+      setErrMsg(
+        "Biometric prompt was cancelled or unavailable in this browser view — confirm manually below."
+      );
+    }
+  }
+
+  return (
+    <GameShell test={test} onDone={onDone} strict={strict}>
+      <div className="grid h-full place-items-center p-6 text-center">
+        <div className="max-w-xs">
+          <p className="mb-4 text-sm text-[var(--muted)]">
+            Trigger the phone&apos;s platform authenticator (Face ID, Touch ID, or fingerprint) to verify the biometric sensor.
+          </p>
+          <button
+            className="btn w-full"
+            disabled={state === "running"}
+            onClick={verifyBiometric}
+          >
+            {state === "running"
+              ? "Waiting for biometric…"
+              : state === "error"
+                ? "Try biometric prompt again"
+                : "🙂 Scan Face ID / Fingerprint"}
+          </button>
+          {errMsg && (
+            <p className="mt-3 text-xs text-[var(--warn)]">{errMsg}</p>
+          )}
+          <div className="mt-4 flex gap-2">
+            <button
+              className="btn btn-good flex-1"
+              onClick={() => onDone("pass")}
+            >
+              ✓ Works manually
+            </button>
+          </div>
         </div>
       </div>
     </GameShell>
@@ -745,26 +966,35 @@ function CameraGame({ test, onDone, model = "" }: GameProps) {
 
 /* ---------- 8. Vibration ---------- */
 function VibrationGame({ test, onDone }: GameProps) {
-  const [buzzed, setBuzzed] = useState(false);
-  const supported = typeof navigator !== "undefined" && "vibrate" in navigator;
+  const supported =
+    typeof navigator !== "undefined" && typeof navigator.vibrate === "function";
+  const [buzzed, setBuzzed] = useState(!supported);
+
   function buzz() {
-    navigator.vibrate?.([200, 100, 200, 100, 400]);
+    try {
+      navigator.vibrate?.([200, 100, 200, 100, 400]);
+    } catch {
+      /* ignore */
+    }
     setBuzzed(true);
   }
+
   return (
     <GameShell test={test} onDone={onDone} hideFail>
       <div className="grid h-full place-items-center p-6 text-center">
         <div>
           {!supported && (
             <p className="mb-3 text-sm text-[var(--warn)]">
-              No Vibration API here (normal on iPhone) — confirm manually.
+              No Web Vibration API in this browser (normal on iPhone Safari) — toggle silent/ring switch or confirm haptics manually.
             </p>
           )}
-          <button className="btn" onClick={buzz}>
-            📳 Buzz now
-          </button>
+          {supported && (
+            <button className="btn" onClick={buzz}>
+              📳 {buzzed ? "Buzz again" : "Buzz now"}
+            </button>
+          )}
           {buzzed && (
-            <div className="mt-6 flex gap-2">
+            <div className="mt-6 flex justify-center gap-2">
               <button className="btn btn-good" onClick={() => onDone("pass")}>
                 ✓ Felt it
               </button>
@@ -779,17 +1009,59 @@ function VibrationGame({ test, onDone }: GameProps) {
   );
 }
 
-/* ---------- 9. Hardware buttons (manual) ---------- */
+/* ---------- 9. Hardware buttons (auto-detect + manual confirm) ---------- */
 function ButtonsGame({ test, onDone }: GameProps) {
   const items = ["Power", "Volume +", "Volume −", "Mute / Action"];
   const [ok, setOk] = useState<boolean[]>(items.map(() => false));
+  const [lastDetected, setLastDetected] = useState<string>("");
+
+  useEffect(() => {
+    const markIndex = (idx: number, label: string) => {
+      setLastDetected(label);
+      setOk((prev) => prev.map((v, j) => (j === idx ? true : v)));
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "AudioVolumeUp" || e.key === "VolumeUp" || e.code === "VolumeUp") {
+        markIndex(1, "Volume + key event");
+      } else if (
+        e.key === "AudioVolumeDown" ||
+        e.key === "VolumeDown" ||
+        e.code === "VolumeDown"
+      ) {
+        markIndex(2, "Volume − key event");
+      } else if (e.key === "AudioVolumeMute" || e.key === "VolumeMute") {
+        markIndex(3, "Mute / Action event");
+      } else if (e.key === "Power") {
+        markIndex(0, "Power button event");
+      }
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") {
+        markIndex(0, "Power / screen lock detected");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
   const allChecked = ok.every(Boolean);
   return (
     <GameShell test={test} onDone={onDone} hideFail>
       <div className="flex h-full flex-col p-5">
         <p className="mb-3 text-center text-sm text-[var(--muted)]">
-          Press each physical button and tap it here once it responds.
+          Press each physical button — or tap its row below once you confirm it clicks and responds.
         </p>
+        {lastDetected && (
+          <p className="mb-2 text-center text-xs font-semibold text-[var(--good)]">
+            Detected: {lastDetected} ✓
+          </p>
+        )}
         <div className="flex flex-col gap-2">
           {items.map((it, i) => (
             <button
@@ -828,9 +1100,12 @@ export const GAMES: Record<string, (p: GameProps) => React.ReactNode> = {
   multitouch: MultiTouchGame,
   display: DisplayGame,
   motion: MotionGame,
+  compass: CompassGame,
   mic: MicGame,
+  voice: MicGame,
   speaker: SpeakerGame,
   camera: CameraGame,
+  faceid: BiometricGame,
   vibration: VibrationGame,
   buttons: ButtonsGame,
 };

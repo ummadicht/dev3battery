@@ -39,7 +39,7 @@ const GROUPS: { title: string; ids: string[] }[] = [
   { title: "Touch & Display", ids: ["touch", "multitouch", "display"] },
   { title: "Audio", ids: ["speaker", "mic"] },
   { title: "Cameras", ids: ["camera"] },
-  { title: "Sensors & Motion", ids: ["motion", "vibration"] },
+  { title: "Sensors & Motion", ids: ["motion", "compass", "vibration"] },
   { title: "Biometrics", ids: ["faceid"] },
   { title: "Buttons", ids: ["buttons"] },
 ];

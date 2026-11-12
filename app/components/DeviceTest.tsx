@@ -55,7 +55,9 @@ const CHECKS0: Check[] = [
   { id: "mic", label: "Microphone", state: "wait" },
   { id: "speaker", label: "Speaker", state: "wait" },
   { id: "motion", label: "Gyroscope / motion", state: "wait" },
+  { id: "compass", label: "Compass / magnetometer", state: "wait" },
   { id: "vibration", label: "Vibration", state: "wait" },
+  { id: "buttons", label: "Hardware buttons", state: "wait" },
   { id: "battery", label: "Battery", state: "wait" },
 ];
 
@@ -200,6 +202,11 @@ export default function DeviceTest({
   const [deviceModel, setDeviceModel] = useState("");
   const [speakerAsk, setSpeakerAsk] = useState(false); // manual "did you hear the beep?" fallback
   const speakerResolveRef = useRef<((heard: boolean) => void) | null>(null);
+  const [vibrationAsk, setVibrationAsk] = useState(false);
+  const vibrationResolveRef = useRef<((res: Res) => void) | null>(null);
+  const [buttonsAsk, setButtonsAsk] = useState(false);
+  const [buttonDetected, setButtonDetected] = useState<string>("");
+  const buttonsResolveRef = useRef<((res: Res) => void) | null>(null);
   const wakeRef = useRef<any>(null);
 
   // Manual speaker check — never a dead end when the acoustic loopback can't confirm
@@ -216,7 +223,36 @@ export default function DeviceTest({
       setSpeakerAsk(true);
     });
   }
+
+  function askVibrationManually(): Promise<Res> {
+    return new Promise((resolve) => {
+      try {
+        navigator.vibrate?.([250, 100, 250]);
+      } catch {
+        /* ignore */
+      }
+      vibrationResolveRef.current = (res: Res) => {
+        vibrationResolveRef.current = null;
+        setVibrationAsk(false);
+        resolve(res);
+      };
+      setVibrationAsk(true);
+    });
+  }
+
+  function askButtonsManually(): Promise<Res> {
+    return new Promise((resolve) => {
+      setButtonDetected("");
+      buttonsResolveRef.current = (res: Res) => {
+        buttonsResolveRef.current = null;
+        setButtonsAsk(false);
+        resolve(res);
+      };
+      setButtonsAsk(true);
+    });
+  }
   const motionOKRef = useRef(false);
+  const orientOKRef = useRef(false);
 
   // Touch-test state — "wipe to clear": drag to erase a fog layer; a hidden grid
   // tracks how much of the panel the finger actually reached.
@@ -272,10 +308,25 @@ export default function DeviceTest({
     }
     try {
       const anyDM = (window as any).DeviceMotionEvent;
-      if (anyDM?.requestPermission) await anyDM.requestPermission();
-      motionOKRef.current = true;
+      if (anyDM?.requestPermission) {
+        const p = await anyDM.requestPermission();
+        motionOKRef.current = p === "granted";
+      } else {
+        motionOKRef.current = true;
+      }
     } catch {
-      /* denied — motion/vibration will skip */
+      /* denied — motion/vibration will fall back */
+    }
+    try {
+      const anyDO = (window as any).DeviceOrientationEvent;
+      if (anyDO?.requestPermission) {
+        const p = await anyDO.requestPermission();
+        orientOKRef.current = p === "granted";
+      } else {
+        orientOKRef.current = true;
+      }
+    } catch {
+      orientOKRef.current = motionOKRef.current;
     }
     primer.getTracks().forEach((t) => t.stop());
     (navigator as any).wakeLock?.request?.("screen").then((w: any) => (wakeRef.current = w)).catch(() => {});
@@ -447,24 +498,110 @@ export default function DeviceTest({
       set("motion", "skip", "Motion permission not granted");
     }
 
-    // 5. Vibration — buzz + detect the spike on the accelerometer.
+    // 4b. Compass / magnetometer — heading via DeviceOrientation.
+    set("compass", "run");
+    if (orientOKRef.current || motionOK) {
+      let headingDeg: number | null = null;
+      let isCalibrated = false;
+      const onO = (ev: DeviceOrientationEvent) => {
+        const wk = (ev as DeviceOrientationEvent & { webkitCompassHeading?: number })
+          .webkitCompassHeading;
+        if (typeof wk === "number" && Number.isFinite(wk)) {
+          headingDeg = ((wk % 360) + 360) % 360;
+          isCalibrated = true;
+        } else if (ev.absolute && typeof ev.alpha === "number" && Number.isFinite(ev.alpha)) {
+          headingDeg = (360 - ev.alpha) % 360;
+          isCalibrated = true;
+        } else if (headingDeg === null && typeof ev.alpha === "number" && Number.isFinite(ev.alpha)) {
+          headingDeg = (360 - ev.alpha) % 360;
+        }
+      };
+      window.addEventListener("deviceorientationabsolute" as any, onO, { passive: true });
+      window.addEventListener("deviceorientation", onO, { passive: true });
+      await new Promise((r) => setTimeout(r, 750));
+      window.removeEventListener("deviceorientationabsolute" as any, onO);
+      window.removeEventListener("deviceorientation", onO);
+      if (headingDeg !== null) {
+        const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+        const dir = dirs[Math.round(headingDeg / 45) % 8];
+        results.compass = "pass";
+        set(
+          "compass",
+          "pass",
+          `Heading ${Math.round(headingDeg)}° (${dir})${isCalibrated ? "" : " · relative"}`
+        );
+      } else {
+        results.compass = "skip";
+        set("compass", "skip", "Compass sensor unavailable — check manually");
+      }
+    } else {
+      results.compass = "skip";
+      set("compass", "skip", "Orientation permission not granted");
+    }
+
+    // 5. Vibration — sample resting baseline first, then buzz and measure delta;
+    // if IMU cannot confirm it (or iOS Safari without navigator.vibrate), ask user.
     set("vibration", "run");
-    if ("vibrate" in navigator && motionOK) {
-      let spike = 0;
+    let vibAutoPassed = false;
+    if (typeof navigator.vibrate === "function" && motionOK) {
+      const restSamples: number[] = [];
+      let peakDelta = 0;
+      let baseline: number | null = null;
       const onM = (e: DeviceMotionEvent) => {
+        const lin = e.acceleration;
         const a = e.accelerationIncludingGravity;
-        if (a) spike = Math.max(spike, Math.abs(a.x || 0) + Math.abs(a.y || 0) + Math.abs(a.z || 0));
+        const mag =
+          lin && (lin.x !== null || lin.y !== null || lin.z !== null)
+            ? Math.hypot(lin.x || 0, lin.y || 0, lin.z || 0)
+            : a
+              ? Math.hypot(a.x || 0, a.y || 0, a.z || 0)
+              : 0;
+        if (baseline === null) {
+          restSamples.push(mag);
+        } else {
+          peakDelta = Math.max(peakDelta, Math.abs(mag - baseline));
+        }
       };
       window.addEventListener("devicemotion", onM);
-      const rest = spike;
-      navigator.vibrate([400]);
+      await new Promise((r) => setTimeout(r, 200));
+      baseline =
+        restSamples.length > 0
+          ? restSamples.reduce((s, v) => s + v, 0) / restSamples.length
+          : 0;
+      try {
+        navigator.vibrate([400]);
+      } catch {
+        /* ignore */
+      }
       await new Promise((r) => setTimeout(r, 600));
       window.removeEventListener("devicemotion", onM);
-      results.vibration = spike > rest + 2 ? "pass" : "fail";
-    } else results.vibration = "skip";
-    set("vibration", results.vibration);
+      if (restSamples.length > 0 && peakDelta > 0.65) {
+        vibAutoPassed = true;
+      }
+    }
+    if (vibAutoPassed) {
+      results.vibration = "pass";
+      set("vibration", "pass");
+    } else {
+      set("vibration", "run", "Confirm vibration…");
+      results.vibration = await askVibrationManually();
+      set(
+        "vibration",
+        results.vibration,
+        results.vibration === "fail" ? "Vibration not felt" : undefined
+      );
+    }
 
-    // 6. Battery (Android exposes it).
+    // 6. Hardware buttons — detect Volume/Power events or quick operator confirmation.
+    set("buttons", "run", "Press Volume / Power or confirm…");
+    results.buttons = await askButtonsManually();
+    set(
+      "buttons",
+      results.buttons,
+      results.buttons === "fail" ? "Hardware button reported faulty" : undefined
+    );
+
+    // 7. Battery (Android exposes it).
     set("battery", "run");
     try {
       const b = await (navigator as any).getBattery?.();
@@ -488,15 +625,15 @@ export default function DeviceTest({
 
     // The biometric test runs on ANY phone with a platform authenticator —
     // Face ID / Touch ID on iPhone, fingerprint / face unlock on Android &
-    // Samsung. WebAuthn triggers whatever biometric the OS has, so we only need
-    // to (a) confirm a platform authenticator exists and (b) name it correctly
-    // for the seller so the label never says "Face ID" on an Android.
+    // Samsung.
     let bioLabelLocal = "Biometric unlock";
+    let isMobileDevice = false;
     try {
       const ua = navigator.userAgent;
       const isIphone = /iPhone/.test(ua);
       const isIpad = /iPad/.test(ua);
       const isAndroid = /Android/.test(ua);
+      isMobileDevice = isIphone || isIpad || isAndroid;
       let model = "";
       try {
         model = (await fetch(withBase(`/api/sessions/${sessionId}/screen`)).then((r) => r.json()))?.model || "";
@@ -517,11 +654,10 @@ export default function DeviceTest({
     } catch {
       bioAvailable = false;
     }
-    if (bioAvailable) {
+    if (bioAvailable || isMobileDevice) {
       setBioLabel(bioLabelLocal);
       setTimeout(() => setPhase("faceid"), 700);
     } else {
-      // No platform biometric available → don't run (or record) a biometric test.
       setTimeout(finishTests, 900);
     }
   }
@@ -530,11 +666,7 @@ export default function DeviceTest({
     void saveFunctional({ functional: partial, merge: true });
   }
 
-  // Face ID / biometric — the person's idea: a passkey ceremony. Registering a
-  // platform passkey with userVerification "required" makes the OS run Face ID
-  // (or Touch ID). If it completes, the biometric sensor + Secure Enclave path
-  // works. WebAuthn won't say WHICH method verified, so it proves "Face ID or
-  // device passcode" — honest wording in the UI.
+  // Face ID / biometric — passkey ceremony with manual fallback if cancelled/blocked.
   async function runFaceId() {
     setBioState("running");
     let res: Res = "fail";
@@ -563,8 +695,16 @@ export default function DeviceTest({
       res = "fail"; // cancelled or biometric failed to verify
     }
     setBioState(res);
+    if (res === "pass") {
+      submitFunctional({ faceid: "pass" });
+      setTimeout(finishTests, 900);
+    }
+  }
+
+  function markFaceIdManual(res: Res) {
+    setBioState(res);
     submitFunctional({ faceid: res });
-    setTimeout(finishTests, 900);
+    finishTests();
   }
 
   function skipFaceId() {
@@ -649,6 +789,36 @@ export default function DeviceTest({
     void handBack();
   }
 
+  useEffect(() => {
+    if (!buttonsAsk) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "AudioVolumeUp" || e.key === "VolumeUp" || e.code === "VolumeUp") {
+        setButtonDetected("Volume + detected ✓");
+      } else if (
+        e.key === "AudioVolumeDown" ||
+        e.key === "VolumeDown" ||
+        e.code === "VolumeDown"
+      ) {
+        setButtonDetected("Volume − detected ✓");
+      } else if (e.key === "Power") {
+        setButtonDetected("Power button detected ✓");
+      }
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") {
+        setButtonDetected("Power / lock button detected ✓");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [buttonsAsk]);
+
   // Enumerate + test each physical camera, reconciled with the model's expected
   // optical lenses. Returns overall pass/fail + per-lens detail for the report.
   async function testCameras(expected: Lens[]) {
@@ -663,24 +833,20 @@ export default function DeviceTest({
 
     const isFront = (l: string) => /front|user|face|selfie/i.test(l);
     const isBack = (l: string) => /back|rear|environment|world|wide|tele|ultra/i.test(l);
-    /* Devices whose label says "back", and devices we cannot classify at all.
-     *
-     * These were one bucket, which let a WORKING FRONT CAMERA satisfy the rear
-     * check: enumerateDevices() frequently returns empty labels (iOS especially),
-     * and an unlabelled device fell into `backDevs` by default. A phone with a
-     * dead rear camera and a working selfie camera therefore reported the rear
-     * as fine. Unknown is now its own bucket and is probed separately, via
-     * facingMode, so it can only ever confirm "some rear camera works" — never
-     * count as one more working rear lens. */
     const backDevs = vids.filter((d) => isBack(d.label));
     const frontDevs = vids.filter((d) => isFront(d.label));
     const unknownDevs = vids.filter((d) => !isFront(d.label) && !isBack(d.label));
 
-    const probe = async (deviceId?: string) => {
+    const probe = async (opts?: { deviceId?: string; facingMode?: "user" | "environment" }) => {
       let stream: MediaStream | null = null;
       try {
+        const videoConstraint = opts?.deviceId
+          ? { deviceId: { exact: opts.deviceId } }
+          : opts?.facingMode === "user"
+            ? { facingMode: "user" }
+            : { facingMode: { ideal: "environment" } };
         stream = await navigator.mediaDevices.getUserMedia({
-          video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: "environment" } },
+          video: videoConstraint,
         });
         const track = stream.getVideoTracks()[0];
         if (!track || track.readyState !== "live") return { live: false, frame: "" };
@@ -689,7 +855,12 @@ export default function DeviceTest({
         v.muted = true;
         v.playsInline = true;
         await v.play().catch(() => {});
-        await new Promise((r) => setTimeout(r, 250));
+        // Wait for video dimensions to populate (up to 800ms) on slower mobile cameras.
+        for (let w = 0; w < 8 && !v.videoWidth; w++) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        await new Promise((r) => setTimeout(r, 200));
         const cv = document.createElement("canvas");
         cv.width = 32;
         cv.height = 32;
@@ -710,21 +881,6 @@ export default function DeviceTest({
           live = varc > 3; // a real scene varies; a dead/covered sensor is flat
         }
 
-        /**
-         * Keep ONE still from this lens, while its stream is already open.
-         *
-         * The variance check above only proves the sensor is producing a
-         * changing image. It passes a camera whose cover is cracked, whose
-         * lens is caked in dust, or whose focus motor is dead — all of which
-         * vary perfectly well. The frame is the only way to see those, and
-         * grabbing it here is nearly free because the hardware is already on.
-         *
-         * The extra settle is NOT padding: autofocus has not converged 250ms
-         * after a stream opens, and a frame captured before it does looks
-         * uniformly soft. Assessing that frame would report "blur" on every
-         * healthy camera in the estate. ~450ms per lens is the price of the
-         * difference between a focus fault and a photo taken too early.
-         */
         let frame = "";
         if (live && v.videoWidth) {
           await new Promise((r) => setTimeout(r, 450));
@@ -735,8 +891,6 @@ export default function DeviceTest({
           const fx = fc.getContext("2d");
           if (fx) {
             fx.drawImage(v, 0, 0, fc.width, fc.height);
-            // 0.72 keeps dust specks and hairline cover cracks legible while
-            // staying far under the route's per-frame byte cap.
             frame = fc.toDataURL("image/jpeg", 0.72);
           }
         }
@@ -754,27 +908,34 @@ export default function DeviceTest({
     let anyBackFail = false;
     for (const d of backDevs) {
       // eslint-disable-next-line no-await-in-loop
-      const r = await probe(d.deviceId);
+      const r = await probe({ deviceId: d.deviceId });
       if (r.frame) grabbed.push({ deviceId: d.deviceId, frame: r.frame });
       r.live ? workingBack++ : (anyBackFail = true);
     }
     if (backDevs.length === 0) {
-      /* No device is labelled "back". Ask the OS for the environment-facing
-       * camera instead of trusting an unlabelled list. This confirms at most
-       * that ONE rear camera works — the unknown devices are not counted. */
       // eslint-disable-next-line no-await-in-loop
-      const r = await probe();
+      const r = await probe({ facingMode: "environment" });
       if (r.frame) grabbed.push({ deviceId: "rear", frame: r.frame });
       if (r.live) workingBack = 1;
       else anyBackFail = true;
     }
-    void unknownDevs; // deliberately not counted — see the bucket comment above
+    void unknownDevs;
     let workingFront = 0;
+    let anyFrontFail = false;
     for (const d of frontDevs) {
       // eslint-disable-next-line no-await-in-loop
-      const r = await probe(d.deviceId);
+      const r = await probe({ deviceId: d.deviceId });
       if (r.frame) grabbed.push({ deviceId: d.deviceId, frame: r.frame });
       if (r.live) workingFront++;
+      else anyFrontFail = true;
+    }
+    if (frontDevs.length === 0) {
+      // Probe front camera via facingMode: "user" when browser labels were empty.
+      // eslint-disable-next-line no-await-in-loop
+      const r = await probe({ facingMode: "user" });
+      if (r.frame) grabbed.push({ deviceId: "front", frame: r.frame });
+      if (r.live) workingFront = 1;
+      else anyFrontFail = true;
     }
 
     const lensResults: LensResult[] = [];
@@ -782,9 +943,6 @@ export default function DeviceTest({
     rearTargets.forEach((l, i) => {
       let state: LensResult["state"];
       if (i < workingBack) state = "pass";
-      // A rear camera the browser DID expose and could not open is a failure.
-      // `anyBackFail` was computed and then discarded with `void anyBackFail`,
-      // so a dead rear camera could never produce one.
       else if (anyBackFail && i < backDevs.length) state = "fail";
       else if (workingBack >= 1) state = "manual"; // browser grouped the lenses
       else state = "fail";
@@ -792,27 +950,19 @@ export default function DeviceTest({
     });
     const frontTargets = expFront.length ? expFront : [{ id: "front", name: "Front (selfie)", facing: "front" as const }];
     frontTargets.forEach((l) => {
+      const state: LensResult["state"] =
+        workingFront >= 1 ? "pass" : frontDevs.length || anyFrontFail ? "fail" : "manual";
       lensResults.push({
         id: l.id,
         name: l.name,
         facing: "front",
-        state: workingFront >= 1 ? "pass" : frontDevs.length ? "fail" : "manual",
-        ...(workingFront >= 1 || frontDevs.length ? { by: "browser" as const } : {}),
+        state,
+        ...(state !== "manual" ? { by: "browser" as const } : {}),
       });
     });
 
-    /**
-     * Bind each grabbed still to a LENS, not to a camera device.
-     *
-     * The browser exposes fewer video devices than the phone has lenses — a Pro
-     * iPhone reports one rear camera for three. So frames are matched in the
-     * same order the probes ran, and only to lenses the browser could actually
-     * open. A lens marked "manual" was never separately testable and therefore
-     * has no frame of its own; claiming one would attach a wide-angle picture
-     * to a telephoto verdict.
-     */
     const rearGrabs = grabbed.filter((g) => g.deviceId !== "front" && !frontDevs.some((d) => d.deviceId === g.deviceId));
-    const frontGrabs = grabbed.filter((g) => frontDevs.some((d) => d.deviceId === g.deviceId));
+    const frontGrabs = grabbed.filter((g) => g.deviceId === "front" || frontDevs.some((d) => d.deviceId === g.deviceId));
     const framePayload: { lensId: string; name: string; facing: string; photo: string }[] = [];
     lensResults
       .filter((l) => l.facing === "rear" && l.state === "pass")
@@ -828,19 +978,12 @@ export default function DeviceTest({
       });
 
     if (framePayload.length) {
-      // Fire-and-forget, off the test's critical path. A camera test must never
-      // fail, stall, or lose its verdict because an image upload was slow — the
-      // pass/fail above is already decided and is what the seller is waiting on.
       void fetch(withBase(`/api/sessions/${sessionId}/camera-frames`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ frames: framePayload }),
       })
         .then(() =>
-          // Assessment is deliberately a SEPARATE, un-awaited call: a Pro vision
-          // request takes seconds, and nothing in the functional flow should wait
-          // on it. If it never lands, the report says "not assessed" — which is
-          // an honest answer, and not the same as "clear".
           fetch(withBase(`/api/sessions/${sessionId}/camera-assess`), { method: "POST" })
         )
         .catch(() => {});
@@ -849,15 +992,6 @@ export default function DeviceTest({
     const passed = lensResults.filter((l) => l.state === "pass").length;
     const manual = lensResults.filter((l) => l.state === "manual").length;
     const failed = lensResults.filter((l) => l.state === "fail").length;
-    /* "pass" now means EVERY expected lens was verified.
-     *
-     * It used to mean "at least one camera worked", which on a Pro iPhone — three
-     * rear lenses, one exposed camera device — made "pass" unreachable to
-     * disprove: lens 0 verified, lenses 1 and 2 marked manual, manual counted as
-     * neither pass nor fail, and the overall result read "pass". A customer with
-     * a broken telephoto got a clean camera line on their report.
-     *
-     * Unverified is not verified. It reports as "skip" and the note says how many. */
     const state: Res = failed > 0 ? "fail" : manual > 0 ? "skip" : passed > 0 ? "pass" : "skip";
     const note =
       failed > 0
@@ -892,10 +1026,6 @@ export default function DeviceTest({
             Browsers require one permission tap before hardware can be tested —
             this is the only setup step.
           </p>
-          {/* The camera test now KEEPS one frame per lens. The images are never
-              displayed here, but not displaying them is a UI decision — not
-              telling anyone would be a consent problem, and those are different
-              choices. Disclosed plainly, once, where permission is granted. */}
           <p className="mt-2 text-[11px] text-[var(--muted)]">
             The camera check takes one photo through each lens to confirm it still
             focuses cleanly. Those photos are attached to this device&apos;s
@@ -922,9 +1052,6 @@ export default function DeviceTest({
         <div className="mx-auto w-full max-w-sm">
           <div className="text-4xl">🔍</div>
           <h1 className="mt-2 text-xl font-extrabold">Check the other lenses</h1>
-          {/* Say WHY this is being asked. Handing someone extra work without a
-              reason reads as a broken app; the real reason is specific and the
-              seller can act on it. */}
           <p className="mt-1 text-[13.5px] text-[var(--muted)]">
             The browser can only reach one rear camera on this phone, so the wide-angle and
             zoom lenses have not been tested. Take one photo at each zoom — of the{" "}
@@ -1037,7 +1164,7 @@ export default function DeviceTest({
             {bioState === "pass"
               ? `The biometric sensor unlocked a secure passkey — ${bioLabel} works.`
               : bioState === "fail"
-                ? `${bioLabel} didn't complete. It may be faulty, not enrolled, or was cancelled — check manually.`
+                ? `${bioLabel} prompt didn't complete. Try again or record the manual check below.`
                 : `Tap below and use ${bioLabel} on the phone. GradeIQ registers a secure passkey — if the biometric unlocks it, the sensor works.`}
           </p>
           {bioState === "idle" || bioState === "fail" ? (
@@ -1045,8 +1172,22 @@ export default function DeviceTest({
               <button className="btn mt-5 w-full" onClick={runFaceId}>
                 {bioState === "fail" ? "Try again" : `Scan ${bioLabel}`}
               </button>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => markFaceIdManual("pass")}
+                  className="btn btn-good flex-1 text-xs"
+                >
+                  ✓ Works
+                </button>
+                <button
+                  onClick={() => markFaceIdManual("fail")}
+                  className="btn btn-bad flex-1 text-xs"
+                >
+                  ✕ Faulty
+                </button>
+              </div>
               <button onClick={skipFaceId} className="mt-3 block w-full text-[13px] text-[var(--muted)] underline">
-                Skip — check manually
+                Skip — check manually later
               </button>
             </>
           ) : bioState === "running" ? (
@@ -1124,6 +1265,91 @@ export default function DeviceTest({
                 className="flex-1 rounded-full border border-black/15 py-3 font-bold"
               >
                 No
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {vibrationAsk && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/70 px-6 backdrop-blur-sm">
+          <div className="w-full max-w-xs rounded-3xl bg-white p-6 text-center text-[#141018]">
+            <div className="text-4xl">📳</div>
+            <div className="mt-2 text-lg font-black">Did the phone vibrate?</div>
+            <p className="mt-1 text-sm text-black/60">
+              {typeof navigator !== "undefined" && typeof navigator.vibrate === "function"
+                ? "Confirm whether you felt the vibration pulse."
+                : "Toggle the ring/silent switch or haptic feedback and confirm if vibration works."}
+            </p>
+            {typeof navigator !== "undefined" && typeof navigator.vibrate === "function" && (
+              <button
+                onClick={() => {
+                  try {
+                    navigator.vibrate?.([300, 100, 300]);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className="mt-3 rounded-full border border-black/15 px-4 py-1.5 text-xs font-bold"
+              >
+                📳 Buzz again
+              </button>
+            )}
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => vibrationResolveRef.current?.("pass")}
+                className="flex-1 rounded-full py-3 font-bold text-white"
+                style={{ background: "linear-gradient(135deg,#12b0a0,#0b7d78)" }}
+              >
+                Yes ✓
+              </button>
+              <button
+                onClick={() => vibrationResolveRef.current?.("fail")}
+                className="flex-1 rounded-full border border-black/15 py-3 font-bold"
+              >
+                No ✕
+              </button>
+              <button
+                onClick={() => vibrationResolveRef.current?.("skip")}
+                className="rounded-full border border-black/15 px-3 py-3 text-xs font-semibold text-black/60"
+              >
+                Skip
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {buttonsAsk && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/70 px-6 backdrop-blur-sm">
+          <div className="w-full max-w-xs rounded-3xl bg-white p-6 text-center text-[#141018]">
+            <div className="text-4xl">🔘</div>
+            <div className="mt-2 text-lg font-black">Check hardware buttons</div>
+            <p className="mt-1 text-sm text-black/60">
+              Press Volume + / Volume − and check that physical buttons click cleanly.
+            </p>
+            {buttonDetected && (
+              <div className="mt-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                {buttonDetected}
+              </div>
+            )}
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => buttonsResolveRef.current?.("pass")}
+                className="flex-1 rounded-full py-3 font-bold text-white"
+                style={{ background: "linear-gradient(135deg,#12b0a0,#0b7d78)" }}
+              >
+                All work ✓
+              </button>
+              <button
+                onClick={() => buttonsResolveRef.current?.("fail")}
+                className="flex-1 rounded-full border border-black/15 py-3 font-bold"
+              >
+                Faulty ✕
+              </button>
+              <button
+                onClick={() => buttonsResolveRef.current?.("skip")}
+                className="rounded-full border border-black/15 px-3 py-3 text-xs font-semibold text-black/60"
+              >
+                Skip
               </button>
             </div>
           </div>
