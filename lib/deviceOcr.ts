@@ -6,7 +6,7 @@ import { getSetting } from "./settings";
 // STRICT honesty: only report a field when its text is actually legible in a
 // frame. Never infer or invent — a missing field stays missing.
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3.5-flash";
 
 export type DeviceOcr = {
   model?: string;

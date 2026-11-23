@@ -78,11 +78,11 @@ function geminiModel(tier: VisionTier): string {
  * when the Flash model is down (`unavailable`, after its one retry) or hung
  * (`timeout`), ONE other Gemini model gets the call before the other vendors
  * do: `gemini_model_flash_fallback` (or GEMINI_MODEL_FLASH_FALLBACK), default
- * gemini-2.5-flash. Skipped when it is the primary. Pro has no such chain: a
+ * gemini-3.5-flash. Skipped when it is the primary. Pro has no such chain: a
  * failed Pro already falls back to Flash.
  */
 function geminiFlashFallback(): string {
-  return getSetting("gemini_model_flash_fallback", "GEMINI_MODEL_FLASH_FALLBACK") || "gemini-2.5-flash";
+  return getSetting("gemini_model_flash_fallback", "GEMINI_MODEL_FLASH_FALLBACK") || "gemini-3.5-flash";
 }
 
 /** The model id this provider uses at this tier. */

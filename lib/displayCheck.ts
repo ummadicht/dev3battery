@@ -7,7 +7,7 @@ import { getSetting } from "./settings";
 // backlight bleed — the things a human normally has to eyeball. Keyless →
 // honest stub (no fabricated verdict).
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3.5-flash";
 
 export type DisplayFinding = {
   pattern: string; // which colour it was most visible on
